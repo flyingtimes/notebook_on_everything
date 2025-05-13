@@ -121,6 +121,9 @@ async def _try_locate_and_act(page: Page, selector: str, action_type: str, text:
 # --- End Helper Functions ---
 async def run_generated_script(book_name=None):
     global SENSITIVE_DATA
+    # 创建下载完成事件
+    download_completed = asyncio.Event()
+    
     async with async_playwright() as p:
         browser = None
         context = None
@@ -141,6 +144,8 @@ async def run_generated_script(book_name=None):
                 print(f"正在下载: {download.suggested_filename}")
                 await download.save_as(os.path.join(download_path, download.suggested_filename))
                 print(f"下载完成: {download.suggested_filename}")
+                # 设置下载完成事件，通知主程序可以退出
+                download_completed.set()
             
             page.on("download", handle_download)
             # Initial page handling
@@ -174,9 +179,14 @@ async def run_generated_script(book_name=None):
             # Action 4
             await _try_locate_and_act(page, "xpath=//a[@class=\"btn btn-default addDownloadedBook\"]", "click", step_info="Step 3, 下载")
             print("等待下载完成...")
-            # 等待下载完成
-            await page.wait_for_timeout(60000)  # 30秒应该足够大多数下载
-            print("下载等待时间结束")
+            
+            # 等待下载完成事件或超时
+            try:
+                # 设置超时时间为60秒
+                await asyncio.wait_for(download_completed.wait(), timeout=60)
+                print("下载已完成，准备退出程序...")
+            except asyncio.TimeoutError:
+                print("下载超时，程序将退出...")
             
         except PlaywrightActionError as pae:
             print(f'\n--- Playwright 操作错误: {pae} ---', file=sys.stderr)
@@ -265,6 +275,9 @@ if __name__ == "__main__":
         if os.name == 'nt':
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         asyncio.run(run_generated_script(args.name))
+        # 脚本执行完成后关闭Chrome
+        print("脚本执行完成，正在关闭Chrome...")
+        chrome_process.terminate()
     except KeyboardInterrupt:
         print("正在关闭Chrome...")
         chrome_process.terminate()
