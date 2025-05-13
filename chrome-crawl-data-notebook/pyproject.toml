@@ -1,0 +1,13 @@
+[project]
+name = "chrome-crawl-data-notebook"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "argparse>=1.4.0",
+    "asyncio>=3.4.3",
+    "dotenv>=0.9.9",
+    "patchright>=1.52.3",
+    "pathlib>=1.0.1",
+]
