@@ -8,7 +8,10 @@ import tempfile # 用于创建临时文件
 from mutagen.mp3 import MP3
 import argparse # 用于解析命令行参数
 import torch # 移到顶部，以便尽早检查CUDA
-
+from openai import OpenAI # 导入OpenAI库
+from dotenv import load_dotenv
+# 从.env文件加载环境变量
+load_dotenv()
 def get_audio_duration_fast(file_path):
     """
     快速获取音频文件时长，不加载文件内容
@@ -231,6 +234,7 @@ def smart_split_mp3(file_path, target_duration_sec=60, silence_thresh=-55, min_s
     # (保持 smart_split_mp3 函数内容不变，因为其逻辑是复用的)
     # ... 确保之前的语言检测和文件写入逻辑仍然存在 ...
     print(f"\n所有切分完成！转录结果已保存到 {output_text_file}")
+    return output_text_file # 返回result.txt的文件路径，方便后续处理
 
 def download_audio(url, output_filename="input.mp3", cookies_file="cookies.txt"):
     """
@@ -263,8 +267,64 @@ def download_audio(url, output_filename="input.mp3", cookies_file="cookies.txt")
         print(f"下载过程中发生错误: {e}")
         return False
 
+def summarize_text_with_openai(text_file_path, model="qwen/qwen3-235b-a22b:free"):
+    """
+    使用OpenAI API对指定文本文件的内容进行综述。
+    """
+    print(f"\n开始使用OpenAI对 {text_file_path} 的内容进行综述...")
+    try:
+        # 确保 API密钥已设置 (通常通过环境变量 OPENAI_API_KEY)
+        if not os.getenv("OPENAI_API_KEY"):
+            print("错误: OPENAI_API_KEY 环境变量未设置。")
+            print("请设置您的OpenAI API密钥后重试。")
+            return None
+
+        client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),  # 从环境变量获取API密钥
+            base_url='https://openrouter.ai/api/v1'
+        )
+
+        with open(text_file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        if not content.strip():
+            print("文本文件内容为空，无法进行综述。")
+            return None
+
+        # 构建prompt
+        # 您可以根据需要调整这个prompt
+        prompt_message = f"请将以下内容转换成流畅易懂的中文口语化的口播稿，内容要清晰且连贯：\n\n{content}"
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt_message}
+            ]
+        )
+        
+        summary = response.choices[0].message.content
+        print("\n--- OpenAI 综述结果 ---")
+        print(summary)
+        print("--- 综述结束 ---")
+        
+        
+        # 可以选择将综述结果保存到文件
+        summary_file_path = f"{os.path.splitext(text_file_path)[0]}_summary.txt"
+        with open(summary_file_path, 'w', encoding='utf-8') as f_summary:
+            f_summary.write(summary)
+        print(f"综述结果已保存到: {summary_file_path}")
+        return summary
+
+    except ImportError:
+        print("错误: openai 库未安装。请运行 'pip install openai' 安装。")
+        return None
+    except Exception as e:
+        print(f"调用OpenAI API时发生错误: {e}")
+        return None
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='下载YouTube视频的音频并进行智能切分和转录。')
+    parser = argparse.ArgumentParser(description='下载YouTube视频的音频，进行智能切分和转录，并使用OpenAI进行综述。')
     parser.add_argument('url', type=str, help='要下载的视频的URL。')
     parser.add_argument('--output_mp3', type=str, default="input.mp3", help='下载的MP3文件名。')
     parser.add_argument('--cookies', type=str, default="cookies.txt", help='用于yt-dlp的cookies文件名。')
@@ -272,6 +332,8 @@ if __name__ == "__main__":
     parser.add_argument('--target_sec', type=int, default=60, help='每个切分片段的目标时长（秒）。')
     parser.add_argument('--silence_db', type=int, default=-55, help='静音检测的阈值 (dBFS)。')
     parser.add_argument('--min_silence_ms', type=int, default=300, help='最小静音长度（毫秒）。')
+    parser.add_argument('--openai_model', type=str, default="gpt-3.5-turbo", help='用于综述的OpenAI模型。')
+    parser.add_argument('--skip_summary', action='store_true', help='如果设置，则跳过OpenAI综述步骤。')
 
     args = parser.parse_args()
 
@@ -282,24 +344,26 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"获取GPU设备名称失败: {e}")
 
-    # 检查cookies文件是否存在
     if not os.path.exists(args.cookies):
         print(f"警告: Cookies 文件 '{args.cookies}' 未找到。下载可能会失败或受限。")
-        # 可以选择在这里退出，或者尝试无cookies下载
-        # exit(1)
 
-    # 1. 下载音频
     if download_audio(args.url, output_filename=args.output_mp3, cookies_file=args.cookies):
-        # 2. 如果下载成功，则执行智能切分
         if os.path.exists(args.output_mp3):
             print(f"\n开始处理音频文件: {args.output_mp3}")
-            smart_split_mp3(
+            result_file = smart_split_mp3(
                 args.output_mp3, 
                 target_duration_sec=args.target_sec,
                 silence_thresh=args.silence_db,
                 min_silence_len=args.min_silence_ms,
                 chunk_duration_min=args.chunk_min
             )
+
+            if result_file and os.path.exists(result_file) and not args.skip_summary:
+                summarize_text_with_openai(result_file, model=args.openai_model)
+            elif args.skip_summary:
+                print("已跳过OpenAI综述步骤。")
+            elif not result_file or not os.path.exists(result_file):
+                print(f"错误: 转录结果文件 {result_file if result_file else 'result.txt'} 未找到，无法进行综述。")
         else:
             print(f"错误: 下载的音频文件 {args.output_mp3} 未找到，尽管下载报告成功。")
     else:

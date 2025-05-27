@@ -1,3 +1,4 @@
 cookies.txt
 user_data/
 *.mp3
+.env
