@@ -1,7 +1,7 @@
 from pydub import AudioSegment
 from pydub.silence import detect_silence
 import math
-
+import platform
 def smart_split_mp3(file_path, target_duration_sec=60, silence_thresh=-55, min_silence_len=300, seek_window_sec=10):
     """
     智能切分MP3文件，力求在停顿处切分，每段大约为指定时长。
@@ -20,6 +20,19 @@ def smart_split_mp3(file_path, target_duration_sec=60, silence_thresh=-55, min_s
 
     start_ms = 0
     part_num = 1
+        # 根据操作系统确定默认路径
+    system = platform.system()
+    if system == 'Windows':
+        import whisper
+        model = whisper.load_model("large-v3-turbo")
+    elif system == 'Darwin':  # macOS
+        import mlx_whisper
+    elif system == 'Linux':
+        import whisper
+        model = whisper.load_model("large-v3-turbo")
+    else:
+        # 不支持的操作系统
+        raise Exception(f"不支持的操作系统: {system}")
 
     while start_ms < total_length_ms:
         end_ms_candidate = min(start_ms + target_duration_ms, total_length_ms)
@@ -80,8 +93,19 @@ def smart_split_mp3(file_path, target_duration_sec=60, silence_thresh=-55, min_s
         chunk = audio[start_ms:split_point_ms]
         output_filename = f"{file_path.split('.')[0]}_part_{part_num:03d}.mp3"
         chunk.export(output_filename, format="mp3")
-        print(f"导出 {output_filename} (时长: {len(chunk)/1000:.2f} 秒)")
-
+        #print(f"导出 {output_filename} (时长: {len(chunk)/1000:.2f} 秒)")
+        system = platform.system()
+        if system == 'Windows':
+            result = model.transcribe(output_filename,initial_prompt="这是一段会议纪要,请避免输出重复信息。")
+        elif system == 'Darwin':  # macOS
+            result = mlx_whisper.transcribe(output_filename,initial_prompt="这是一段会议纪要,请避免输出重复信息。", path_or_hf_repo="mlx-community/whisper-large-v3-mlx")
+        elif system == 'Linux':
+            result = model.transcribe(output_filename,initial_prompt="这是一段会议纪要,请避免输出重复信息。")
+        else:
+            # 不支持的操作系统
+            raise Exception(f"不支持的操作系统: {system}")
+        
+        print(result["text"])
         start_ms = split_point_ms
         part_num += 1
 
@@ -89,6 +113,8 @@ def smart_split_mp3(file_path, target_duration_sec=60, silence_thresh=-55, min_s
 
 if __name__ == "__main__":
     input_mp3_file = "input.mp3"  # 替换为你的MP3文件路径
-
-    # 调用切分函数
+    import torch
+    print(torch.cuda.is_available())  # Should print True
+    print(torch.cuda.get_device_name(0))  # Should print your GPU 
+        # 调用切分函数
     smart_split_mp3(input_mp3_file)
