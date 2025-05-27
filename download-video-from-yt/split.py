@@ -2,119 +2,305 @@ from pydub import AudioSegment
 from pydub.silence import detect_silence
 import math
 import platform
-def smart_split_mp3(file_path, target_duration_sec=60, silence_thresh=-55, min_silence_len=300, seek_window_sec=10):
+import os
+import subprocess # 用于调用ffmpeg 和 yt-dlp
+import tempfile # 用于创建临时文件
+from mutagen.mp3 import MP3
+import argparse # 用于解析命令行参数
+import torch # 移到顶部，以便尽早检查CUDA
+
+def get_audio_duration_fast(file_path):
+    """
+    快速获取音频文件时长，不加载文件内容
+    """
+    try:
+        audio_file = MP3(file_path)
+        return int(audio_file.info.length * 1000)  # 转换为毫秒
+    except Exception as e:
+        print(f"使用mutagen获取时长失败: {e}")
+        return get_duration_with_ffprobe(file_path)
+
+def get_duration_with_ffprobe(file_path):
+    """
+    使用ffprobe获取音频时长
+    """
+    try:
+        cmd = [
+            'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+            '-of', 'csv=p=0', file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        duration_sec = float(result.stdout.strip())
+        return int(duration_sec * 1000)  # 转换为毫秒
+    except Exception as e:
+        print(f"使用ffprobe获取时长失败: {e}")
+        return estimate_duration_by_filesize(file_path)
+
+def estimate_duration_by_filesize(file_path):
+    """
+    根据文件大小估算时长（不够精确，仅作备用）
+    """
+    file_size = os.path.getsize(file_path)
+    estimated_duration_sec = file_size / (128 * 1024 / 8) # 假设平均比特率为128kbps
+    return int(estimated_duration_sec * 1000)
+
+def extract_chunk_with_ffmpeg(input_path, output_path, start_ms, end_ms):
+    """
+    使用ffmpeg提取音频片段
+    """
+    start_sec = start_ms / 1000.0
+    duration_sec = (end_ms - start_ms) / 1000.0
+    cmd = [
+        'ffmpeg', '-i', input_path,
+        '-ss', str(start_sec),
+        '-t', str(duration_sec),
+        '-c', 'copy', # 直接复制流，速度快
+        output_path, '-y' # 覆盖输出文件
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"ffmpeg提取失败: {e}")
+        print(f"ffmpeg stderr: {e.stderr.decode()}")
+        return False
+
+def smart_split_mp3(file_path, target_duration_sec=60, silence_thresh=-55, min_silence_len=300, seek_window_sec=10, chunk_duration_min=20):
     """
     智能切分MP3文件，力求在停顿处切分，每段大约为指定时长。
-
-    Args:
-        file_path (str): MP3文件的路径。
-        target_duration_sec (int): 目标切分时长（秒）。
-        silence_thresh (int): 静音阈值（dBFS）。低于此值被认为是静音。
-        min_silence_len (int): 最小静音持续时间（毫秒）。
-        seek_window_sec (int): 在目标切分点前后查找静音的窗口大小（秒）。
+    终极优化版本：使用ffmpeg提取块，快速获取文件时长，每次只处理指定时长的文件内容。
+    新增功能：自动检测第一个分段的语言，后续分段使用该语言，并将所有转录文本写入result.txt。
     """
-    audio = AudioSegment.from_mp3(file_path)
-    total_length_ms = len(audio)
-    target_duration_ms = target_duration_sec * 1000
-    seek_window_ms = seek_window_sec * 1000
+    print("快速获取文件信息...")
+    total_length_ms = get_audio_duration_fast(file_path)
+    if total_length_ms == 0:
+        print("无法获取音频时长，退出。")
+        return
 
-    start_ms = 0
-    part_num = 1
-        # 根据操作系统确定默认路径
+    print(f"文件总时长: {total_length_ms/1000/60:.2f} 分钟")
+
     system = platform.system()
+    model = None
+    detected_language = None  # 用于存储检测到的语言
+    output_text_file = "result.txt" # 输出文本文件名
+
+    # 清空或准备result.txt文件
+    with open(output_text_file, 'w', encoding='utf-8') as f:
+        f.write("") # 创建或清空文件
+
     if system == 'Windows':
         import whisper
-        model = whisper.load_model("large-v3-turbo")
-    elif system == 'Darwin':  # macOS
+        # 模型加载推迟到第一次转录前，以便获取GPU信息
+    elif system == 'Darwin':
         import mlx_whisper
+        # mlx_whisper.transcribe 会自行加载模型
     elif system == 'Linux':
         import whisper
-        model = whisper.load_model("large-v3-turbo")
+        # 模型加载推迟到第一次转录前
     else:
-        # 不支持的操作系统
         raise Exception(f"不支持的操作系统: {system}")
 
-    while start_ms < total_length_ms:
-        end_ms_candidate = min(start_ms + target_duration_ms, total_length_ms)
+    target_duration_ms = target_duration_sec * 1000
+    seek_window_ms = seek_window_sec * 1000
+    chunk_duration_ms = chunk_duration_min * 60 * 1000
 
-        # 定义查找静音的起始和结束点
-        search_start_ms = max(start_ms, end_ms_candidate - seek_window_ms)
-        search_end_ms = min(total_length_ms, end_ms_candidate + seek_window_ms)
+    global_start_ms = 0
+    part_num = 1
+    first_transcription_done = False
 
-        # 确保 search_start_ms 不会超过 search_end_ms
-        if search_start_ms >= search_end_ms:
-            # 如果窗口太小或在文件末尾，直接切分到文件结束
-            split_point_ms = total_length_ms
-        else:
-            # 在一个范围内查找静音
-            segment_to_search = audio[search_start_ms:search_end_ms]
-            silences = detect_silence(segment_to_search, min_silence_len=min_silence_len, silence_thresh=silence_thresh)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        while global_start_ms < total_length_ms:
+            chunk_end_ms = min(global_start_ms + chunk_duration_ms, total_length_ms)
+            print(f"\n处理主块时间段: {global_start_ms/1000/60:.2f} - {chunk_end_ms/1000/60:.2f} 分钟")
 
-            split_point_ms = -1
+            temp_chunk_path = os.path.join(temp_dir, f"temp_chunk_{part_num}.mp3")
+            print(f"使用ffmpeg提取主块到: {temp_chunk_path}")
+            if not extract_chunk_with_ffmpeg(file_path, temp_chunk_path, global_start_ms, chunk_end_ms):
+                print("无法提取主块，跳过此块。")
+                global_start_ms = chunk_end_ms
+                continue
+            
+            print("加载提取的主块...")
+            try:
+                current_chunk_audio = AudioSegment.from_mp3(temp_chunk_path)
+            except Exception as e:
+                print(f"加载提取的主块失败: {e}, 跳过此块。")
+                os.remove(temp_chunk_path) # 确保删除失败加载的临时文件
+                global_start_ms = chunk_end_ms
+                continue
+            
+            if os.path.exists(temp_chunk_path):
+                os.remove(temp_chunk_path) # 删除临时主块文件
 
-            if silences:
-                # 尝试找到离 target_duration_ms 最近的静音点
-                closest_silence_start = -1
+            print("检测静音段...")
+            silences = detect_silence(current_chunk_audio, min_silence_len=min_silence_len, silence_thresh=silence_thresh)
+
+            chunk_internal_start_ms = 0
+            while chunk_internal_start_ms < len(current_chunk_audio):
+                chunk_internal_end_candidate = min(chunk_internal_start_ms + target_duration_ms, len(current_chunk_audio))
+                search_start = max(0, chunk_internal_end_candidate - seek_window_ms)
+                search_end = min(len(current_chunk_audio), chunk_internal_end_candidate + seek_window_ms)
+                split_point = chunk_internal_end_candidate
+                best_silence_start = None
                 min_diff = float('inf')
 
-                for silence_start, silence_end in silences:
-                    # 将静音点转换为原始音频的绝对时间
-                    absolute_silence_start = search_start_ms + silence_start
+                for silence_start_loop, silence_end_loop in silences: # Renamed to avoid conflict
+                    if search_start <= silence_start_loop <= search_end:
+                        if silence_start_loop >= chunk_internal_end_candidate:
+                            diff = silence_start_loop - chunk_internal_end_candidate
+                            if diff < min_diff:
+                                min_diff = diff
+                                best_silence_start = silence_start_loop
+                                break # Found a good point after candidate
+                        diff = abs(silence_start_loop - chunk_internal_end_candidate)
+                        if diff < min_diff:
+                            min_diff = diff
+                            best_silence_start = silence_start_loop
+                
+                if best_silence_start is not None:
+                    split_point = best_silence_start
+                
+                if split_point <= chunk_internal_start_ms: # Ensure progress
+                    split_point = min(chunk_internal_start_ms + target_duration_ms, len(current_chunk_audio))
+                
+                # Ensure split_point does not exceed current_chunk_audio length
+                split_point = min(split_point, len(current_chunk_audio))
+
+                if chunk_internal_start_ms >= split_point: # Avoid creating empty segments if stuck
+                    if chunk_internal_start_ms < len(current_chunk_audio):
+                         split_point = len(current_chunk_audio) # Process the rest of the chunk
+                    else:
+                        break # No more audio in this chunk
+
+                segment = current_chunk_audio[chunk_internal_start_ms:split_point]
+                if len(segment) == 0: # Skip empty segments
+                    chunk_internal_start_ms = split_point
+                    if split_point >= len(current_chunk_audio):
+                        break
+                    continue
+
+                output_filename = f"{os.path.splitext(file_path)[0]}_part_{part_num:03d}.mp3"
+                segment.export(output_filename, format="mp3")
+                print(f"导出 {output_filename} (时长: {len(segment)/1000:.2f} 秒)")
+
+                try:
+                    transcribe_language = detected_language if detected_language else None # Use None for auto-detect on first pass
+                    initial_prompt_text = "transcribe the following video." # Default prompt
+                    if detected_language == "zh" or (transcribe_language is None and not first_transcription_done): # Special prompt for Chinese or first detection
+                        initial_prompt_text = "以下是普通话的句子，请转写成简体中文。"
                     
-                    # 优先考虑在目标时长之后的静音点，并且距离目标时长越近越好
-                    if absolute_silence_start >= end_ms_candidate:
-                        diff = abs(absolute_silence_start - end_ms_candidate)
-                        if diff < min_diff:
-                            min_diff = diff
-                            closest_silence_start = absolute_silence_start
-                            split_point_ms = closest_silence_start
-                            break # 找到第一个符合条件的就用它
+                    if model is None and (system == 'Windows' or system == 'Linux'):
+                        print("加载Whisper模型...")
+                        model = whisper.load_model("large-v3") # Changed to large-v3 as turbo might not be standard
+                    
+                    if system == 'Windows' or system == 'Linux':
+                        result = model.transcribe(output_filename, language=transcribe_language, initial_prompt=initial_prompt_text)
+                    elif system == 'Darwin':
+                        # For mlx_whisper, language detection is usually part of the transcribe call if language is None
+                        # We'll set it after the first transcription
+                        result = mlx_whisper.transcribe(output_filename, 
+                                                      language=transcribe_language, 
+                                                      initial_prompt=initial_prompt_text, 
+                                                      path_or_hf_repo="mlx-community/whisper-large-v3-mlx")
+                    
+                    if not first_transcription_done:
+                        detected_language = result.get('language', 'en') # Default to 'en' if not detected
+                        print(f"检测到的语言: {detected_language}")
+                        first_transcription_done = True
+                        # Update prompt if language is now known and it's Chinese
+                        if detected_language == "zh":
+                            initial_prompt_text = "以下是普通话的句子，请转写成简体中文。"
 
-                # 如果没有找到目标时长之后的静音点，则找目标时长之前且最近的
-                if split_point_ms == -1:
-                     min_diff = float('inf')
-                     for silence_start, silence_end in silences:
-                        absolute_silence_start = search_start_ms + silence_start
-                        diff = abs(absolute_silence_start - end_ms_candidate)
-                        if diff < min_diff:
-                            min_diff = diff
-                            closest_silence_start = absolute_silence_start
-                            split_point_ms = closest_silence_start
-            else:
-                # 如果在查找范围内没有找到静音，则在候选结束点切分
-                split_point_ms = end_ms_candidate
+                    print(f"转录结果 ({detected_language}): {result['text']}")
+                    with open(output_text_file, 'a', encoding='utf-8') as f:
+                        f.write(result['text'] + '\n')
 
-        # 确保切分点不小于当前起始点
-        if split_point_ms <= start_ms:
-            split_point_ms = min(start_ms + target_duration_ms, total_length_ms)
+                except Exception as e:
+                    print(f"转录出错: {e}")
+                
+                del segment
+                chunk_internal_start_ms = split_point
+                part_num += 1
+                if split_point >= len(current_chunk_audio):
+                    break
+            
+            del current_chunk_audio
+            global_start_ms = chunk_end_ms
+            print(f"完成处理主块: {global_start_ms/1000/60:.2f} - {chunk_end_ms/1000/60:.2f} 分钟")
 
+    # (保持 smart_split_mp3 函数内容不变，因为其逻辑是复用的)
+    # ... 确保之前的语言检测和文件写入逻辑仍然存在 ...
+    print(f"\n所有切分完成！转录结果已保存到 {output_text_file}")
 
-        # 切分音频
-        chunk = audio[start_ms:split_point_ms]
-        output_filename = f"{file_path.split('.')[0]}_part_{part_num:03d}.mp3"
-        chunk.export(output_filename, format="mp3")
-        #print(f"导出 {output_filename} (时长: {len(chunk)/1000:.2f} 秒)")
-        system = platform.system()
-        if system == 'Windows':
-            result = model.transcribe(output_filename,initial_prompt="这是一段会议纪要,请避免输出重复信息。")
-        elif system == 'Darwin':  # macOS
-            result = mlx_whisper.transcribe(output_filename,initial_prompt="这是一段会议纪要,请避免输出重复信息。", path_or_hf_repo="mlx-community/whisper-large-v3-mlx")
-        elif system == 'Linux':
-            result = model.transcribe(output_filename,initial_prompt="这是一段会议纪要,请避免输出重复信息。")
+def download_audio(url, output_filename="input.mp3", cookies_file="cookies.txt"):
+    """
+    使用 yt-dlp 下载音频。
+    """
+    print(f"开始下载音频从 URL: {url}")
+    command = [
+        'yt-dlp',
+        '--cookies', cookies_file,
+        '--audio-format', 'mp3',
+        '-x', # 提取音频
+        '-o', output_filename,
+        url
+    ]
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        if process.returncode == 0:
+            print(f"音频成功下载并保存为: {output_filename}")
+            return True
         else:
-            # 不支持的操作系统
-            raise Exception(f"不支持的操作系统: {system}")
-        
-        print(result["text"])
-        start_ms = split_point_ms
-        part_num += 1
-
-    print("切分完成！")
+            print(f"下载失败。错误码: {process.returncode}")
+            print(f"yt-dlp stdout: {stdout.decode(errors='ignore')}")
+            print(f"yt-dlp stderr: {stderr.decode(errors='ignore')}")
+            return False
+    except FileNotFoundError:
+        print("错误: yt-dlp 命令未找到。请确保它已安装并配置在系统PATH中。")
+        return False
+    except Exception as e:
+        print(f"下载过程中发生错误: {e}")
+        return False
 
 if __name__ == "__main__":
-    input_mp3_file = "input.mp3"  # 替换为你的MP3文件路径
-    import torch
-    print(torch.cuda.is_available())  # Should print True
-    print(torch.cuda.get_device_name(0))  # Should print your GPU 
-        # 调用切分函数
-    smart_split_mp3(input_mp3_file)
+    parser = argparse.ArgumentParser(description='下载YouTube视频的音频并进行智能切分和转录。')
+    parser.add_argument('url', type=str, help='要下载的视频的URL。')
+    parser.add_argument('--output_mp3', type=str, default="input.mp3", help='下载的MP3文件名。')
+    parser.add_argument('--cookies', type=str, default="cookies.txt", help='用于yt-dlp的cookies文件名。')
+    parser.add_argument('--chunk_min', type=int, default=20, help='smart_split_mp3处理的主块时长（分钟）。')
+    parser.add_argument('--target_sec', type=int, default=60, help='每个切分片段的目标时长（秒）。')
+    parser.add_argument('--silence_db', type=int, default=-55, help='静音检测的阈值 (dBFS)。')
+    parser.add_argument('--min_silence_ms', type=int, default=300, help='最小静音长度（毫秒）。')
+
+    args = parser.parse_args()
+
+    print(f"CUDA可用: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        try:
+            print(f"GPU设备: {torch.cuda.get_device_name(0)}")
+        except Exception as e:
+            print(f"获取GPU设备名称失败: {e}")
+
+    # 检查cookies文件是否存在
+    if not os.path.exists(args.cookies):
+        print(f"警告: Cookies 文件 '{args.cookies}' 未找到。下载可能会失败或受限。")
+        # 可以选择在这里退出，或者尝试无cookies下载
+        # exit(1)
+
+    # 1. 下载音频
+    if download_audio(args.url, output_filename=args.output_mp3, cookies_file=args.cookies):
+        # 2. 如果下载成功，则执行智能切分
+        if os.path.exists(args.output_mp3):
+            print(f"\n开始处理音频文件: {args.output_mp3}")
+            smart_split_mp3(
+                args.output_mp3, 
+                target_duration_sec=args.target_sec,
+                silence_thresh=args.silence_db,
+                min_silence_len=args.min_silence_ms,
+                chunk_duration_min=args.chunk_min
+            )
+        else:
+            print(f"错误: 下载的音频文件 {args.output_mp3} 未找到，尽管下载报告成功。")
+    else:
+        print("音频下载失败，无法继续处理。")

@@ -5,7 +5,7 @@
 
 这个时候可以使用：
 ```
-yt-dlp --cookies cookies.txt -x --audio-format mp3 https://www.youtube.com/watch?v=_OvXR0Lqhbk
+yt-dlp --cookies cookies.txt --audio-format mp3 -x -o "input.mp3"  https://www.youtube.com/watch?v=n4SStAx1D3M 
 ```
 来下载视频字幕了。
 
