@@ -2,3 +2,5 @@ cookies.txt
 user_data/
 *.mp3
 .env
+result.txt
+result_summary.txt

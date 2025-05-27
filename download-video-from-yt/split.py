@@ -335,7 +335,8 @@ if __name__ == "__main__":
     parser.add_argument('--openai_model', type=str, default="qwen/qwen3-235b-a22b:free", help='用于综述的OpenAI模型。')
     parser.add_argument('--skip_summary', action='store_true', help='如果设置，则跳过OpenAI综述步骤。')
 
-    args = parser.parse_args()    print(f"CUDA可用: {torch.cuda.is_available()}")
+    args = parser.parse_args()    
+    print(f"CUDA可用: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         try:
             print(f"GPU设备: {torch.cuda.get_device_name(0)}")
