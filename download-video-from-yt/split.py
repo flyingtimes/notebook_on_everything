@@ -332,12 +332,10 @@ if __name__ == "__main__":
     parser.add_argument('--target_sec', type=int, default=60, help='每个切分片段的目标时长（秒）。')
     parser.add_argument('--silence_db', type=int, default=-55, help='静音检测的阈值 (dBFS)。')
     parser.add_argument('--min_silence_ms', type=int, default=300, help='最小静音长度（毫秒）。')
-    parser.add_argument('--openai_model', type=str, default="gpt-3.5-turbo", help='用于综述的OpenAI模型。')
+    parser.add_argument('--openai_model', type=str, default="qwen/qwen3-235b-a22b:free", help='用于综述的OpenAI模型。')
     parser.add_argument('--skip_summary', action='store_true', help='如果设置，则跳过OpenAI综述步骤。')
 
-    args = parser.parse_args()
-
-    print(f"CUDA可用: {torch.cuda.is_available()}")
+    args = parser.parse_args()    print(f"CUDA可用: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         try:
             print(f"GPU设备: {torch.cuda.get_device_name(0)}")
