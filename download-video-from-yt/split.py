@@ -12,6 +12,9 @@ from openai import OpenAI # 导入OpenAI库
 from dotenv import load_dotenv
 import re
 from urllib.parse import urlparse, parse_qs  # 添加URL解析相关的库
+from tqdm import tqdm  # 导入进度条库
+import time  # 用于模拟进度
+import sys  # 用于实时输出
 # 从.env文件加载环境变量
 load_dotenv()
 def get_audio_duration_fast(file_path):
@@ -150,13 +153,12 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
     """
     智能切分MP3文件，并将所有输出（分段、转录文本）保存到指定的output_dir。
     """
-    print("快速获取文件信息...")
     total_length_ms = get_audio_duration_fast(file_path)
     if total_length_ms == 0:
         print("无法获取音频时长，退出。")
         return None
 
-    print(f"文件总时长: {total_length_ms/1000/60:.2f} 分钟")
+    print(f"文件总时长: {total_length_ms/1000} 秒")
 
     system = platform.system()
     model = None
@@ -182,21 +184,29 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
     part_num = 1
     first_transcription_done = False
 
+    # 创建总进度条
+    total_progress = tqdm(total=total_length_ms/1000, desc="总体进度", unit="ms", unit_scale=True, position=0)
+    
     # 主临时目录仍然使用tempfile，但分段MP3会保存到output_dir
     with tempfile.TemporaryDirectory() as temp_dir_for_chunks:
         while global_start_ms < total_length_ms:
             chunk_end_ms = min(global_start_ms + chunk_duration_ms, total_length_ms)
-            print(f"\n处理主块时间段: {global_start_ms/1000/60:.2f} - {chunk_end_ms/1000/60:.2f} 分钟")
+            #print(f"\n处理主块时间段: {global_start_ms/1000/60:.2f} - {chunk_end_ms/1000/60:.2f} 分钟")
 
             # 临时主块文件仍在临时目录中
             temp_main_chunk_path = os.path.join(temp_dir_for_chunks, f"temp_main_chunk_{part_num}.mp3")
-            print(f"使用ffmpeg提取主块到: {temp_main_chunk_path}")
-            if not extract_chunk_with_ffmpeg(file_path, temp_main_chunk_path, global_start_ms, chunk_end_ms):
+            
+            # 提取主块进度条
+            extract_desc = f"提取主块 {part_num}"
+
+            success = extract_chunk_with_ffmpeg(file_path, temp_main_chunk_path, global_start_ms, chunk_end_ms)
+                
+            if not success:
                 print("无法提取主块，跳过此块。")
                 global_start_ms = chunk_end_ms
                 continue
             
-            print("加载提取的主块...")
+            #print("加载提取的主块...")
             try:
                 current_chunk_audio = AudioSegment.from_mp3(temp_main_chunk_path)
             except Exception as e:
@@ -204,14 +214,18 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
                 if os.path.exists(temp_main_chunk_path):
                     os.remove(temp_main_chunk_path)
                 global_start_ms = chunk_end_ms
+                
                 continue
             
             if os.path.exists(temp_main_chunk_path):
                 os.remove(temp_main_chunk_path)
 
-            print("检测静音段...")
+            #print("检测静音段...")
             silences = detect_silence(current_chunk_audio, min_silence_len=min_silence_len, silence_thresh=silence_thresh)
 
+            # 创建分段进度条
+            #segment_progress = tqdm(total=len(current_chunk_audio), desc="分段进度", unit="ms", position=1, leave=False)
+            
             chunk_internal_start_ms = 0
             while chunk_internal_start_ms < len(current_chunk_audio):
                 chunk_internal_end_candidate = min(chunk_internal_start_ms + target_duration_ms, len(current_chunk_audio))
@@ -259,16 +273,16 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
                 base_mp3_filename = os.path.splitext(os.path.basename(file_path))[0]
                 output_segment_filename = os.path.join(output_dir, f"{base_mp3_filename}_part_{part_num:03d}.mp3")
                 segment.export(output_segment_filename, format="mp3")
-                print(f"导出 {output_segment_filename} (时长: {len(segment)/1000:.2f} 秒)")
+                #print(f"导出 {output_segment_filename} (时长: {len(segment)/1000:.2f} 秒)")
 
                 try:
                     transcribe_language = detected_language if detected_language else None
-                    initial_prompt_text = "transcribe the following video."
+                    initial_prompt_text = "transcribe the following audio."
                     if detected_language == "zh" or (transcribe_language is None and not first_transcription_done):
-                        initial_prompt_text = "以下是普通话的句子，请转写成简体中文。"
+                        initial_prompt_text = "提取音频中的文字内容。"
                     
                     if model is None and (system == 'Windows' or system == 'Linux'):
-                        print("加载Whisper模型...")
+                        #print("加载Whisper模型...")
                         model = whisper.load_model("large-v3")
                     
                     if system == 'Windows' or system == 'Linux':
@@ -279,17 +293,11 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
                                                       initial_prompt=initial_prompt_text, 
                                                       path_or_hf_repo="mlx-community/whisper-large-v3-mlx")
                     
-                    if not first_transcription_done:
-                        detected_language = result.get('language', 'en')
-                        print(f"检测到的语言: {detected_language}")
-                        first_transcription_done = True
-                        if detected_language == "zh":
-                            initial_prompt_text = "以下是普通话的句子，请转写成简体中文。"
 
-                    print(f"转录结果 ({detected_language}): {result['text']}")
+                    # print(f"转录结果 ({detected_language}): {result['text']}")
                     with open(output_text_file, 'a', encoding='utf-8') as f_text:
                         f_text.write(result['text'] + '\n')
-
+                    total_progress.update(len(segment)/1000)
                 except Exception as e:
                     print(f"转录 {output_segment_filename} 出错: {e}")
                 
@@ -301,8 +309,11 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
             
             del current_chunk_audio
             global_start_ms = chunk_end_ms
-            print(f"完成处理主块: {global_start_ms/1000/60:.2f} - {chunk_end_ms/1000/60:.2f} 分钟")
+            #print(f"完成处理主块: {global_start_ms/1000/60:.2f} - {chunk_end_ms/1000/60:.2f} 分钟")
 
+
+    # 关闭总进度条
+    total_progress.close()
     print(f"\n所有切分完成！转录结果已保存到 {output_text_file}")
     return output_text_file
 
@@ -369,11 +380,21 @@ def summarize_text_with_openai(text_file_path, output_dir, model="google/gemini-
             print("文本文件内容为空，无法进行综述。")
             return None
 
-        prompt_message = f"请对以下文本内容进行详细的综述，提取核心观点和关键信息：\n\n{content}"
+        prompt_message = f'''
+        {content}
+        以上是一份优秀的口播稿件。
+        你是一个优秀的口播撰稿人，你写稿子的特点如下：
+        1、你的频道的名字是kaka乱弹。一般以“hello，欢迎来到kaka乱弹的频道”开头。
+        2、你面向的听众是年轻白领，你的性格是年轻、爱美、活泼、聪明。
+        3、你善于把握重点，擅长对复杂的问题进行形象化举例说明。
+        4、你的语言丰富，擅长用网络梗，不喜欢用markdown、表情包、代码块写稿
+        5、你的语言风格接地气，段落和内容切换自然合理，你会规避使用1、2、3.。。。这样的罗列信息的方式来表达，而是采用自然、口语化的方式来衔接
+        6、你学习前面给出的内容，但会避免使用内容中具有个人风格的表达方式，避免使用内容中带有的广告、宣传推广的内容。
+        现在，请你请学习上面的知识，按照你自己的角色风格重新写一份精彩的口播演讲稿。'''
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "你是一个专业的文本内容综述助手。"},
+                {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt_message}
             ]
         )
