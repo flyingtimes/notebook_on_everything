@@ -1,0 +1,19 @@
+# 基础依赖
+pydub>=2.0.0
+mutagen>=1.45.0
+argparse>=1.4.0
+python-dotenv>=0.19.0
+
+# 机器学习相关
+torch>=2.0.0
+
+# 音频转录 (根据操作系统选择安装)
+whisper>=1.0.0; platform_system != "Darwin"  # Windows和Linux系统
+mlx-whisper>=0.1.0; platform_system == "Darwin"  # macOS系统
+
+# API调用
+openai>=1.0.0
+
+# 外部工具依赖 (需要系统安装)
+# ffmpeg - 用于音频处理
+# yt-dlp - 用于下载YouTube视频

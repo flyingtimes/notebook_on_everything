@@ -1,4 +1,26 @@
-要解决各类网站、社交媒体登陆后爬取数据的问题，需要用到浏览器的状态信息和cookies（youtube-dl使用cookies）
+# YouTube视频下载与音频处理工具
+
+这个项目提供了一套工具，用于从YouTube下载视频、提取音频、智能分割长音频、自动转录文本，并可选择使用OpenAI进行内容综述。
+
+## 功能特点
+
+- **视频下载**：使用yt-dlp从YouTube下载视频并提取音频
+- **智能分割**：基于静音检测自动将长音频分割成小片段
+- **自动转录**：使用Whisper/MLX-Whisper模型将音频转录为文本
+- **语言检测**：自动检测音频语言并适配转录
+- **内容综述**：可选使用OpenAI API对转录内容进行智能总结
+- **断点续传**：智能检测已下载文件和已生成文本，避免重复工作
+- **跨平台支持**：Windows/Linux使用Whisper，macOS使用MLX-Whisper
+
+## 安装说明
+
+### 1. 安装依赖库
+
+#### 使用pip安装
+
+```bash
+pip install -r requirements.txt
+```
 
 使用extract_cookies，这时候会弹出一个浏览器窗口，在这个窗口中登录你的账号，登录成功后，关闭浏览器窗口，回到命令行窗口，你会发现命令行窗口已经输出了cookies信息。
 浏览器状态存储在user_data里面，cookies信息存储在cookies.txt里面。
