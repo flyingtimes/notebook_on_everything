@@ -16,7 +16,8 @@ from tqdm import tqdm  # 导入进度条库
 import time  # 用于模拟进度
 import sys  # 用于实时输出
 import logging  # 导入日志模块
-
+import sys
+sys.path.append('CosyVoice')
 # 添加CosyVoice相关导入
 try:
     import torchaudio
@@ -486,8 +487,8 @@ def generate_voice_from_summary(summary_file_path, output_dir, model_path="pretr
         for i, sentence in enumerate(sentences):
             if not sentence.strip():
                 continue
-                
-            logger.info(f"正在生成第 {i+1}/{len(sentences)} 个句子的语音: {sentence[:50]}...")
+            s_len = min(len(sentence), 50)    
+            logger.info(f"正在生成第 {i+1}/{len(sentences)} 个句子的语音: {sentence[:s_len]}...")
             
             try:
                 # 使用SFT模式生成语音

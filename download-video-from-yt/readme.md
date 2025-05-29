@@ -30,5 +30,9 @@ pip install -r requirements.txt
 yt-dlp --cookies cookies.txt --audio-format mp3 -x -o "input.mp3"  https://www.youtube.com/watch?v=n4SStAx1D3M 
 ```
 来下载视频字幕了。
-
+使用cosyvoice
+```
+docker run -it -v $PWD/cosyvoice_models/:/app/models/ --runtime=nvidia harryliu888/cosyvoice python webui.py
+docker run -it -v $PWD/cosyvoice_models/:/app/models/ --runtime=nvidia harryliu888/cosyvoice /bin/bash -c "cd /opt/CosyVoice/CosyVoice/runtime/python/fastapi && python3 server.py --port 50000 --model_dir iic/CosyVoice-300M && sleep infinity"
+```
 使用extract_and_download可以一次性下载视频
