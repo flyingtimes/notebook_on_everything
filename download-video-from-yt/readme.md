@@ -16,6 +16,30 @@
 
 ### 1. 安装依赖库
 
+#### 使用uv管理本项目
+首先确保本路径下venv目录是干净的
+```
+rm -rf venv .venv
+```
+然后指定版本安装venv环境
+```
+uv venv --python python3.12
+```
+然后激活环境
+```
+source .venv/bin/activate
+```
+然后安装依赖库
+```
+pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
+```
+需要补充下载yt—dlp
+```
+uv pip install yt-dlp==2025.5.28.232948.dev0
+```
+
+
+
 #### 使用pip安装
 
 ```bash

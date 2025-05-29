@@ -364,8 +364,8 @@ def download_audio(url, output_path, cookies_file="cookies.txt"):
             return True
         else:
             logger.error(f"下载失败。错误码: {process.returncode}")
-            logger.debug(f"yt-dlp stdout: {stdout.decode(errors='ignore')}")
-            logger.debug(f"yt-dlp stderr: {stderr.decode(errors='ignore')}")
+            logger.error(f"yt-dlp stdout: {stdout.decode(errors='ignore')}")
+            logger.error(f"yt-dlp stderr: {stderr.decode(errors='ignore')}")
             return False
     except FileNotFoundError:
         logger.error("错误: yt-dlp 命令未找到。请确保它已安装并配置在系统PATH中。")
