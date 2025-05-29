@@ -40,11 +40,6 @@ uv pip install yt-dlp==2025.5.28.232948.dev0
 
 
 
-#### 使用pip安装
-
-```bash
-pip install -r requirements.txt
-```
 
 使用extract_cookies，这时候会弹出一个浏览器窗口，在这个窗口中登录你的账号，登录成功后，关闭浏览器窗口，回到命令行窗口，你会发现命令行窗口已经输出了cookies信息。
 浏览器状态存储在user_data里面，cookies信息存储在cookies.txt里面。
@@ -53,10 +48,3 @@ pip install -r requirements.txt
 ```
 yt-dlp --cookies cookies.txt --audio-format mp3 -x -o "input.mp3"  https://www.youtube.com/watch?v=n4SStAx1D3M 
 ```
-来下载视频字幕了。
-使用cosyvoice
-```
-docker run -it -v $PWD/cosyvoice_models/:/app/models/ --runtime=nvidia harryliu888/cosyvoice python webui.py
-docker run -it -v $PWD/cosyvoice_models/:/app/models/ --runtime=nvidia harryliu888/cosyvoice /bin/bash -c "cd /opt/CosyVoice/CosyVoice/runtime/python/fastapi && python3 server.py --port 50000 --model_dir iic/CosyVoice-300M && sleep infinity"
-```
-使用extract_and_download可以一次性下载视频

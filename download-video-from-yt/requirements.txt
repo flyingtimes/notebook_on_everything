@@ -18,6 +18,7 @@ mlx-whisper; platform_system == "Darwin"  # macOS系统
 openai
 playwright
 yt-dlp==2025.5.28.232948.dev0
+fish-audio-sdk
 # 外部工具依赖 (需要系统安装)
 # ffmpeg - 用于音频处理
 # yt-dlp - 用于下载YouTube视频
