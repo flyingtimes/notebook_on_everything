@@ -15,6 +15,31 @@ from urllib.parse import urlparse, parse_qs  # 添加URL解析相关的库
 from tqdm import tqdm  # 导入进度条库
 import time  # 用于模拟进度
 import sys  # 用于实时输出
+import logging  # 导入日志模块
+
+# 添加CosyVoice相关导入
+try:
+    import torchaudio
+    from cosyvoice.cli.cosyvoice import CosyVoice
+    COSYVOICE_AVAILABLE = True
+except ImportError as e:
+    print({e})
+    COSYVOICE_AVAILABLE = False
+    print("警告: CosyVoice相关库未安装，--with-voice选项将不可用")
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("running_log_for_transcribe.log"),
+        logging.StreamHandler()
+    ]
+)
+
+# 创建logger对象
+logger = logging.getLogger('running_log_for_transcribe')
+
 # 从.env文件加载环境变量
 load_dotenv()
 def get_audio_duration_fast(file_path):
@@ -25,7 +50,7 @@ def get_audio_duration_fast(file_path):
         audio_file = MP3(file_path)
         return int(audio_file.info.length * 1000)  # 转换为毫秒
     except Exception as e:
-        print(f"使用mutagen获取时长失败: {e}")
+        logger.error(f"使用mutagen获取时长失败: {e}")
         return get_duration_with_ffprobe(file_path)
 
 def get_duration_with_ffprobe(file_path):
@@ -41,7 +66,7 @@ def get_duration_with_ffprobe(file_path):
         duration_sec = float(result.stdout.strip())
         return int(duration_sec * 1000)  # 转换为毫秒
     except Exception as e:
-        print(f"使用ffprobe获取时长失败: {e}")
+        logger.error(f"使用ffprobe获取时长失败: {e}")
         return estimate_duration_by_filesize(file_path)
 
 def estimate_duration_by_filesize(file_path):
@@ -101,7 +126,7 @@ def get_audio_duration_fast(file_path):
         audio_file = MP3(file_path)
         return int(audio_file.info.length * 1000)  # 转换为毫秒
     except Exception as e:
-        print(f"使用mutagen获取时长失败: {e}")
+        logger.error(f"使用mutagen获取时长失败: {e}")
         return get_duration_with_ffprobe(file_path)
 
 def get_duration_with_ffprobe(file_path):
@@ -117,7 +142,7 @@ def get_duration_with_ffprobe(file_path):
         duration_sec = float(result.stdout.strip())
         return int(duration_sec * 1000)  # 转换为毫秒
     except Exception as e:
-        print(f"使用ffprobe获取时长失败: {e}")
+        logger.error(f"使用ffprobe获取时长失败: {e}")
         return estimate_duration_by_filesize(file_path)
 
 def estimate_duration_by_filesize(file_path):
@@ -155,10 +180,10 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
     """
     total_length_ms = get_audio_duration_fast(file_path)
     if total_length_ms == 0:
-        print("无法获取音频时长，退出。")
+        logger.error("无法获取音频时长，退出。")
         return None
 
-    print(f"文件总时长: {total_length_ms/1000} 秒")
+    logger.info(f"文件总时长: {total_length_ms/1000} 秒")
 
     system = platform.system()
     model = None
@@ -306,7 +331,7 @@ def smart_split_mp3(file_path, output_dir, target_duration_sec=60, silence_thres
                 part_num += 1
                 if split_point >= len(current_chunk_audio):
                     break
-            
+                os.remove(output_segment_filename)
             del current_chunk_audio
             global_start_ms = chunk_end_ms
             #print(f"完成处理主块: {global_start_ms/1000/60:.2f} - {chunk_end_ms/1000/60:.2f} 分钟")
@@ -321,7 +346,7 @@ def download_audio(url, output_path, cookies_file="cookies.txt"):
     """
     使用 yt-dlp 下载音频到指定的output_path。
     """
-    print(f"开始下载音频从 URL: {url} 到 {output_path}")
+    logger.info(f"开始下载音频从 URL: {url} 到 {output_path}")
     command = [
         'yt-dlp',
         '--cookies', cookies_file,
@@ -334,40 +359,40 @@ def download_audio(url, output_path, cookies_file="cookies.txt"):
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = process.communicate()
         if process.returncode == 0:
-            print(f"音频成功下载并保存为: {output_path}")
+            logger.info(f"音频成功下载并保存为: {output_path}")
             return True
         else:
-            print(f"下载失败。错误码: {process.returncode}")
-            print(f"yt-dlp stdout: {stdout.decode(errors='ignore')}")
-            print(f"yt-dlp stderr: {stderr.decode(errors='ignore')}")
+            logger.error(f"下载失败。错误码: {process.returncode}")
+            logger.debug(f"yt-dlp stdout: {stdout.decode(errors='ignore')}")
+            logger.debug(f"yt-dlp stderr: {stderr.decode(errors='ignore')}")
             return False
     except FileNotFoundError:
-        print("错误: yt-dlp 命令未找到。请确保它已安装并配置在系统PATH中。")
+        logger.error("错误: yt-dlp 命令未找到。请确保它已安装并配置在系统PATH中。")
         return False
     except Exception as e:
-        print(f"下载过程中发生错误: {e}")
+        logger.error(f"下载过程中发生错误: {e}")
         return False
 
 def summarize_text_with_openai(text_file_path, output_dir, model="google/gemini-2.0-flash-exp:free"):
     """
     使用OpenAI API对指定文本文件的内容进行综述，并将综述结果保存到output_dir。
     """
-    print(f"\n开始使用OpenAI对 {text_file_path} 的内容进行综述...")
+    logger.info(f"开始使用OpenAI对 {text_file_path} 的内容进行综述...")
     try:
         if not os.getenv("OPENAI_API_KEY"):
-            print("错误: OPENAI_API_KEY 环境变量未设置。")
+            logger.error("错误: OPENAI_API_KEY 环境变量未设置。")
             return None
         if not os.getenv("BASE_URL"):
-            print("错误: BASE_URL 环境变量未设置。")
+            logger.error("错误: BASE_URL 环境变量未设置。")
             return None
 
         # 优先使用环境变量中的MODEL_NAME，如果未设置则使用传入的model参数
         env_model = os.getenv("MODEL_NAME")
         if env_model and env_model.strip():
             model = env_model
-            print(f"使用环境变量中的模型: {model}")
+            logger.info(f"使用环境变量中的模型: {model}")
         else:
-            print(f"使用默认模型: {model}")
+            logger.info(f"使用默认模型: {model}")
         
         # 创建OpenAI客户端实例，使用环境变量中的API密钥和基础URL
         client = OpenAI(
@@ -388,7 +413,7 @@ def summarize_text_with_openai(text_file_path, output_dir, model="google/gemini-
         2、你面向的听众是年轻白领，你的性格是年轻、爱美、活泼、聪明。
         3、你善于把握重点，擅长对复杂的问题进行形象化举例说明。
         4、你的语言丰富，擅长用网络梗，不喜欢用markdown、表情包、代码块写稿
-        5、你的语言风格接地气，段落和内容切换自然合理，你会规避使用1、2、3.。。。这样的罗列信息的方式来表达，而是采用自然、口语化的方式来衔接
+        5、你的语言风格接地气，段落和内容切换自然合理，你会规避使用1、2、3.。。这样的罗列信息的方式来表达，而是采用自然、口语化的方式来衔接
         6、你学习前面给出的内容，但会避免使用内容中具有个人风格的表达方式，避免使用内容中带有的广告、宣传推广的内容。
         现在，请你请学习上面的知识，按照你自己的角色风格重新写一份精彩的口播演讲稿。'''
         response = client.chat.completions.create(
@@ -418,6 +443,82 @@ def summarize_text_with_openai(text_file_path, output_dir, model="google/gemini-
         print(f"调用OpenAI API时发生错误: {e}")
         return None
 
+def split_text_into_sentences(text):
+    """
+    将文本按句子拆分，支持中英文句号、问号、感叹号
+    """
+    # 使用正则表达式按句子分割，支持中英文标点
+    sentences = re.split(r'[。！？.!?]+', text)
+    # 过滤空字符串并去除首尾空格
+    sentences = [s.strip() for s in sentences if s.strip()]
+    return sentences
+
+def generate_voice_from_summary(summary_file_path, output_dir, model_path="pretrained_models/CosyVoice-300M-SFT", speaker="中文女"):
+    """
+    使用CosyVoice将综述文本转换为语音
+    """
+    if not COSYVOICE_AVAILABLE:
+        logger.error("CosyVoice库未安装，无法生成语音")
+        return None
+    
+    try:
+        logger.info(f"开始使用CosyVoice生成语音，模型路径: {model_path}")
+        
+        # 读取综述文本
+        with open(summary_file_path, 'r', encoding='utf-8') as f:
+            summary_text = f.read().strip()
+        
+        if not summary_text:
+            logger.error("综述文件为空，无法生成语音")
+            return None
+        
+        # 初始化CosyVoice模型
+        logger.info("正在加载CosyVoice模型...")
+        cosyvoice = CosyVoice(model_path, load_jit=False, load_trt=False, fp16=False)
+        
+        # 将文本按句子拆分
+        sentences = split_text_into_sentences(summary_text)
+        logger.info(f"文本已拆分为 {len(sentences)} 个句子")
+        
+        # 生成每个句子的音频
+        audio_segments = []
+        
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+                
+            logger.info(f"正在生成第 {i+1}/{len(sentences)} 个句子的语音: {sentence[:50]}...")
+            
+            try:
+                # 使用SFT模式生成语音
+                for j, result in enumerate(cosyvoice.inference_sft(sentence, speaker, stream=False)):
+                    audio_segments.append(result['tts_speech'])
+                    break  # 只取第一个结果
+            except Exception as e:
+                logger.error(f"生成第 {i+1} 个句子的语音时出错: {e}")
+                continue
+        
+        if not audio_segments:
+            logger.error("没有成功生成任何音频片段")
+            return None
+        
+        # 合并所有音频片段
+        logger.info("正在合并音频片段...")
+        combined_audio = torch.cat(audio_segments, dim=1)
+        
+        # 保存合并后的音频文件
+        output_audio_file = os.path.join(output_dir, "summary_voice.wav")
+        torchaudio.save(output_audio_file, combined_audio, cosyvoice.sample_rate)
+        
+        logger.info(f"语音文件已保存到: {output_audio_file}")
+        print(f"语音文件已生成: {output_audio_file}")
+        
+        return output_audio_file
+        
+    except Exception as e:
+        logger.error(f"生成语音时发生错误: {e}")
+        return None
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='下载YouTube视频的音频，进行智能切分和转录，并使用OpenAI进行综述。所有输出保存到 output/{video_id}/ 目录。')
     parser.add_argument('url', type=str, help='要下载的视频的URL。')
@@ -430,25 +531,28 @@ if __name__ == "__main__":
     parser.add_argument('--openai_model', type=str, default="gpt-3.5-turbo", help='用于综述的OpenAI模型。')
     parser.add_argument('--skip_summary', action='store_true', help='如果设置，则跳过OpenAI综述步骤。')
     parser.add_argument('--force', action='store_true', help='强制执行所有步骤，忽略已下载文件和已生成文本。')
+    parser.add_argument('--with-voice', action='store_true', help='如果设置，则使用CosyVoice将综述文本转换为语音。')
+    parser.add_argument('--cosyvoice_model', type=str, default="pretrained_models/CosyVoice-300M-SFT", help='CosyVoice模型路径。')
+    parser.add_argument('--voice_speaker', type=str, default="中文女", help='CosyVoice语音说话人。')
 
     args = parser.parse_args()
 
     video_id = get_video_id_from_url(args.url)
     if not video_id:
-        print(f"无法从URL {args.url} 中提取 video_id。将使用 'unknown_video' 作为ID。")
+        logger.warning(f"无法从URL {args.url} 中提取 video_id。将使用 'unknown_video' 作为ID。")
         video_id = "unknown_video"
     
     # 创建主输出目录 output/
     main_output_dir = "output"
     if not os.path.exists(main_output_dir):
         os.makedirs(main_output_dir)
-        print(f"创建主输出目录: {main_output_dir}")
+        logger.debug(f"创建主输出目录: {main_output_dir}")
 
     # 创建特定视频的输出目录 output/{video_id}/
     video_specific_output_dir = os.path.join(main_output_dir, video_id)
     if not os.path.exists(video_specific_output_dir):
         os.makedirs(video_specific_output_dir)
-        print(f"创建视频专属输出目录: {video_specific_output_dir}")
+        logger.debug(f"创建视频专属输出目录: {video_specific_output_dir}")
 
     # 定义下载的MP3文件名，存放在视频专属目录中
     downloaded_mp3_filename = os.path.join(video_specific_output_dir, f"{video_id}.mp3")
@@ -456,7 +560,9 @@ if __name__ == "__main__":
     result_file = os.path.join(video_specific_output_dir, "result.txt")
     # 定义综述结果文件路径
     summary_file = os.path.join(video_specific_output_dir, "result_summary.txt")
-
+    # 定义语音文件路径
+    voice_file = os.path.join(video_specific_output_dir, "summary_voice.wav")
+    
     print(f"CUDA可用: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         try:
@@ -513,7 +619,30 @@ if __name__ == "__main__":
             print("已跳过OpenAI综述步骤。")
         elif not os.path.exists(result_file):
             print(f"错误: 转录结果文件 {result_file} 未找到，无法进行综述。")
-    elif not download_success:
-        print("音频下载失败，无法继续处理。")
-    elif not os.path.exists(downloaded_mp3_filename):
-        print(f"错误: 下载的音频文件 {downloaded_mp3_filename} 未找到，尽管下载报告成功。")
+        
+        # 生成语音（如果需要且综述文件存在）
+        if getattr(args, 'with_voice', False):  # 使用getattr处理连字符参数
+            if not COSYVOICE_AVAILABLE:
+                print("错误: CosyVoice库未安装，无法生成语音。请安装CosyVoice相关依赖。")
+            elif os.path.exists(summary_file):
+                # 检查语音文件是否已生成
+                voice_needed = True
+                if os.path.exists(voice_file) and not args.force:
+                    print(f"语音文件已存在: {voice_file}")
+                    print("跳过语音生成步骤。如需重新生成，请使用 --force 选项。")
+                    voice_needed = False
+                
+                if voice_needed:
+                    generate_voice_from_summary(
+                        summary_file, 
+                        output_dir=video_specific_output_dir,
+                        model_path=args.cosyvoice_model,
+                        speaker=args.voice_speaker
+                    )
+            else:
+                print(f"错误: 综述文件 {summary_file} 未找到，无法生成语音。请先生成综述。")
+
+if not download_success:
+    print("音频下载失败，无法继续处理。")
+elif not os.path.exists(downloaded_mp3_filename):
+    print(f"错误: 下载的音频文件 {downloaded_mp3_filename} 未找到，尽管下载报告成功。")
