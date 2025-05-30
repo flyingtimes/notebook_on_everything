@@ -18,9 +18,6 @@ YouTube视频音频下载、智能切分、转录和综述工具
 import os
 import sys
 import re
-import json
-import math
-import time
 import asyncio
 import argparse
 import platform
@@ -609,7 +606,10 @@ def load_whisper_model(system):
         object: Whisper模型对象，失败返回None
     """
     try:
-        if system in ['Windows', 'Linux']:
+        # 修复：检查 system 是否为 None
+        if system and system in ['Windows', 'Linux']:
+            # 设置环境变量以避免 NoneType 错误
+            
             import whisper
             logger.info("加载Whisper模型...")
             model = whisper.load_model("large-v3")
@@ -641,8 +641,9 @@ def transcribe_audio_segment(audio_file_path, model, system, language=None):
     """
     try:
         initial_prompt = "提取音频中的文字内容。" if language == "zh" else "transcribe the following audio."
-        
-        if system in ['Windows', 'Linux']:
+
+        # 修复：添加 None 检查
+        if system and system in ['Windows', 'Linux']:
             result = model.transcribe(audio_file_path, language=language, initial_prompt=initial_prompt)
         elif system == 'Darwin':
             result = model.transcribe(

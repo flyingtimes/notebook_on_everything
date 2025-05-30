@@ -1,17 +1,15 @@
 # 基础依赖
 pydub
 mutagen
-argparse
 python-dotenv
 tqdm
-
-# 机器学习相关
-torch
-torchaudio
+pydantic
+typing_extensions
 soundfile
 numpy
+
 # 音频转录 (根据操作系统选择安装)
-whisper; platform_system != "Darwin"  # Windows和Linux系统
+openai-whisper; platform_system != "Darwin"  # Windows和Linux系统
 mlx-whisper; platform_system == "Darwin"  # macOS系统
 
 # API调用
@@ -19,6 +17,8 @@ openai
 playwright
 yt-dlp==2025.5.28.232948.dev0
 fish-audio-sdk
+
 # 外部工具依赖 (需要系统安装)
 # ffmpeg - 用于音频处理
 # yt-dlp - 用于下载YouTube视频
+# 机器学习相关
