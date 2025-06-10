@@ -57,7 +57,37 @@ def get_model_list() -> List[str]:
     model_list_str = os.getenv("MODEL_LIST", "openai/gpt-4")
     return [model.strip() for model in model_list_str.split(",") if model.strip()]
 
-def read_prompt_template(file_path: str = "prompts/1.prompts", subject: str = None) -> str:
+def get_all_prompt_templates(prompts_dir: str = "prompts") -> Dict[str, str]:
+    """读取prompts文件夹下的所有模板文件"""
+    templates = {}
+    
+    if not os.path.exists(prompts_dir):
+        print(f"❌ prompts目录 {prompts_dir} 不存在")
+        return templates
+    
+    # 查找所有.prompts文件
+    prompt_files = glob.glob(os.path.join(prompts_dir, "*.prompts"))
+    
+    if not prompt_files:
+        print(f"❌ 在 {prompts_dir} 目录中没有找到任何.prompts文件")
+        return templates
+    
+    for file_path in prompt_files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                
+            # 获取文件名（不包含扩展名）作为模板名
+            template_name = os.path.splitext(os.path.basename(file_path))[0]
+            templates[template_name] = content
+            print(f"✅ 成功读取模板: {template_name} (长度: {len(content)} 字符)")
+            
+        except Exception as e:
+            print(f"❌ 读取模板文件 {file_path} 时出错: {e}")
+    
+    return templates
+
+def read_prompt_template(file_path: str = "prompts/2.prompts", subject: str = None) -> str:
     """读取提示词模板文件并填充变量"""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -80,67 +110,107 @@ def read_prompt_template(file_path: str = "prompts/1.prompts", subject: str = No
         print(f"读取提示词文件时出错: {e}")
         return None
 
-def sanitize_filename(model_name: str) -> str:
-    """清理模型名称，使其适合作为文件名"""
+def sanitize_filename(name: str) -> str:
+    """清理名称，使其适合作为文件名"""
     # 替换不适合文件名的字符
-    return model_name.replace("/", "_").replace(":", "_").replace("?", "_").replace("*", "_")
+    return name.replace("/", "_").replace(":", "_").replace("?", "_").replace("*", "_").replace("<", "_").replace(">", "_").replace("|", "_").replace('"', "_")
 
-def generate_content_with_models(prompt_template: str, model_list: List[str], api_key: str):
-    """使用多个模型生成内容并保存到input文件夹"""
+def generate_content_with_templates_and_models(templates: Dict[str, str], model_list: List[str], api_key: str, subject: str = None):
+    """使用多个模板和多个模型生成内容并保存到input文件夹"""
     # 确保input文件夹存在
     input_dir = "./input"
     if not os.path.exists(input_dir):
         os.makedirs(input_dir)
         print(f"创建输出目录: {input_dir}")
     
-    results = []
+    all_results = []
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    for i, model_name in enumerate(model_list, 1):
-        print(f"\n[{i}/{len(model_list)}] 正在使用模型: {model_name}")
-        
-        try:
-            # 创建模型实例
-            model = create_openrouter_model(model_name, api_key)
-            
-            # 生成内容
-            print("正在生成内容...")
-            generated_content = model.generate(prompt_template)
-            # 去掉空行
-            generated_content = "\n".join(line for line in generated_content.split("\n") if line.strip())
-            safe_model_name = sanitize_filename(model_name)
-            filename = f"{safe_model_name}_{timestamp}.txt"
-            file_path = os.path.join(input_dir, filename)
-            
-            # 保存内容到文件
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(generated_content)
-            
-            print(f"✅ 内容已保存到: {file_path}")
-            
-            # 记录结果
-            results.append({
-                "model": model_name,
-                "filename": filename,
-                "file_path": file_path,
-                "content_length": len(generated_content),
-                "status": "success",
-                "content": generated_content  # 添加内容用于后续评估
-            })
-            
-        except Exception as e:
-            print(f"❌ 模型 {model_name} 生成失败: {e}")
-            results.append({
-                "model": model_name,
-                "filename": None,
-                "file_path": None,
-                "content_length": 0,
-                "status": "failed",
-                "error": str(e),
-                "content": None
-            })
+    total_combinations = len(templates) * len(model_list)
+    current_combination = 0
     
-    return results
+    print(f"\n开始生成内容: {len(templates)} 个模板 × {len(model_list)} 个模型 = {total_combinations} 个组合\n")
+    
+    for template_name, template_content in templates.items():
+        print(f"\n{'='*60}")
+        print(f"正在处理模板: {template_name}")
+        print(f"{'='*60}")
+        
+        # 使用Jinja2模板引擎处理模板
+        try:
+            template = Template(template_content)
+            if subject:
+                processed_template = template.render(subject=subject)
+            else:
+                processed_template = template_content
+        except Exception as e:
+            print(f"❌ 处理模板 {template_name} 时出错: {e}")
+            continue
+        
+        template_results = []
+        
+        for i, model_name in enumerate(model_list, 1):
+            current_combination += 1
+            print(f"\n[{current_combination}/{total_combinations}] 模板: {template_name} | 模型: {model_name}")
+            
+            try:
+                # 创建模型实例
+                model = create_openrouter_model(model_name, api_key)
+                
+                # 生成内容
+                print("正在生成内容...")
+                generated_content = model.generate(processed_template)
+                # 去掉空行
+                generated_content = "\n".join(line for line in generated_content.split("\n") if line.strip())
+                
+                # 创建文件名：模板名_模型名_时间戳.txt
+                safe_template_name = sanitize_filename(template_name)
+                safe_model_name = sanitize_filename(model_name)
+                filename = f"{safe_template_name}_{safe_model_name}_{timestamp}.txt"
+                file_path = os.path.join(input_dir, filename)
+                
+                # 保存内容到文件
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(generated_content)
+                
+                print(f"✅ 内容已保存到: {file_path}")
+                
+                # 记录结果
+                result = {
+                    "template_name": template_name,
+                    "model": model_name,
+                    "filename": filename,
+                    "file_path": file_path,
+                    "content_length": len(generated_content),
+                    "status": "success",
+                    "content": generated_content  # 添加内容用于后续评估
+                }
+                template_results.append(result)
+                all_results.append(result)
+                
+            except Exception as e:
+                print(f"❌ 模板 {template_name} + 模型 {model_name} 生成失败: {e}")
+                result = {
+                    "template_name": template_name,
+                    "model": model_name,
+                    "filename": None,
+                    "file_path": None,
+                    "content_length": 0,
+                    "status": "failed",
+                    "error": str(e),
+                    "content": None
+                }
+                template_results.append(result)
+                all_results.append(result)
+        
+        # 显示当前模板的结果摘要
+        successful_count = sum(1 for r in template_results if r["status"] == "success")
+        failed_count = len(template_results) - successful_count
+        print(f"\n模板 '{template_name}' 结果摘要:")
+        print(f"  成功生成: {successful_count}/{len(model_list)}")
+        print(f"  生成失败: {failed_count}/{len(model_list)}")
+    
+    return all_results
 
 def read_text_files(directory: str = "./input") -> Dict[str, str]:
     """读取指定目录下的所有文本文件"""
@@ -294,7 +364,8 @@ def main():
     # 解析命令行参数
     args = parse_arguments()
     
-    print("=== AI多模型内容生成与评估系统 ===\n")
+    print("=== AI多模型内容生成与评估系统 ===")
+    print("支持多模板处理\n")
     
     if args.regen:
         print("🔄 模式：重新生成内容并评估")
@@ -306,14 +377,13 @@ def main():
     # 定义用户需求（基于主题）
     user_requirement = f"{args.subject}"
     
-    # 1. 检查API密钥（仅在需要生成内容时检查）
-    api_key = None
+    # 1. 检查API密钥
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("❌ 错误: 请在.env文件中设置OPENROUTER_API_KEY环境变量")
         return
     
-    # 2. 获取模型列表（仅在需要生成内容时获取）
+    # 2. 获取模型列表和模板（仅在需要生成内容时）
     model_list = []
     generation_results = []
     
@@ -324,27 +394,49 @@ def main():
             print(f"  {i}. {model}")
         print()
         
-        # 3. 读取提示词模板
-        prompt_template = read_prompt_template("prompts/1.prompts", subject=args.subject)
-        if not prompt_template:
-            print("❌ 无法读取提示词模板，程序退出")
+        # 3. 读取所有提示词模板
+        templates = get_all_prompt_templates("prompts")
+        if not templates:
+            print("❌ 无法读取任何提示词模板，程序退出")
             return
         
-        print(f"✅ 成功读取提示词模板 (长度: {len(prompt_template)} 字符)")
-        print(f"提示词预览: {prompt_template[:100]}...\n")
+        print(f"\n成功读取 {len(templates)} 个模板:")
+        for template_name in templates.keys():
+            print(f"  - {template_name}")
+        print()
         
         # 4. 生成内容
-        print("开始使用多个模型生成内容...")
-        generation_results = generate_content_with_models(prompt_template, model_list, api_key)
+        print("开始使用多个模板和多个模型生成内容...")
+        generation_results = generate_content_with_templates_and_models(templates, model_list, api_key, args.subject)
         
         # 5. 显示生成结果摘要
-        print("\n=== 生成结果摘要 ===")
+        print("\n" + "=" * 60)
+        print("=== 总体生成结果摘要 ===")
+        print("=" * 60)
+        
         successful_count = sum(1 for r in generation_results if r["status"] == "success")
         failed_count = len(generation_results) - successful_count
         
-        print(f"总模型数: {len(generation_results)}")
+        print(f"总组合数: {len(generation_results)}")
         print(f"成功生成: {successful_count}")
         print(f"生成失败: {failed_count}")
+        
+        # 按模板分组显示结果
+        template_summary = {}
+        for result in generation_results:
+            template_name = result["template_name"]
+            if template_name not in template_summary:
+                template_summary[template_name] = {"success": 0, "failed": 0}
+            
+            if result["status"] == "success":
+                template_summary[template_name]["success"] += 1
+            else:
+                template_summary[template_name]["failed"] += 1
+        
+        print("\n各模板生成情况:")
+        for template_name, counts in template_summary.items():
+            total = counts["success"] + counts["failed"]
+            print(f"  {template_name}: {counts['success']}/{total} 成功")
         
         if successful_count == 0:
             print("❌ 没有成功生成任何内容，无法进行评估")
@@ -387,13 +479,6 @@ def main():
     
     print(f"使用评估模型: {eval_model_name}")
     
-    # 检查评估模型的API密钥
-    if not api_key:
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        if not api_key:
-            print("❌ 错误: 评估阶段需要OPENROUTER_API_KEY环境变量")
-            return
-    
     try:
         eval_model = create_openrouter_model(eval_model_name, api_key)
         print(f"✅ 成功配置评估模型: {eval_model_name}")
@@ -403,6 +488,7 @@ def main():
     
     # 8. 生成或加载评估标准
     evaluation_steps_file = "output/evaluation_steps.json"
+    eval_requirement = user_requirement  # 默认使用用户需求作为评估需求
     
     if os.path.exists(evaluation_steps_file) and not args.regen:
         print(f"\n发现已存在的评估标准文件: {evaluation_steps_file}")
@@ -412,14 +498,17 @@ def main():
             evaluation_steps = load_evaluation_steps(evaluation_steps_file)
             if evaluation_steps:
                 print("已加载现有评估标准")
+                # 使用默认的用户需求作为评估需求
+                print(f"使用评估需求: {eval_requirement}")
             else:
                 print("加载失败，将重新生成")
+                eval_requirement = input("请输入评估需求: ")
                 evaluation_steps = None
         else:
             eval_requirement = input("请输入新的评估需求: ")
             evaluation_steps = None
     else:
-        eval_requirement = input("请输入新的评估需求: ")
+        eval_requirement = input("请输入评估需求: ")
         evaluation_steps = None
     
     # 如果没有评估标准，则生成新的
@@ -445,103 +534,75 @@ def main():
     
     # 9. 评估所有文本
     try:
-        eval_results = evaluate_texts(text_files, user_requirement, evaluation_steps, eval_model)
+        eval_results = evaluate_texts(text_files, eval_requirement, evaluation_steps, eval_model)
     except Exception as e:
         print(f"❌ 评估过程失败: {e}")
         return
     
-    # 10. 排序并显示评估结果
-    eval_results.sort(key=lambda x: x[1], reverse=True)  # 按分数降序排列
+    # 10. 按分数排序并显示结果
+    eval_results.sort(key=lambda x: x[1], reverse=True)
     
-    print("\n=== 评估结果 ===")
-    print(f"{'排名':<4} {'文件名':<30} {'分数':<8} {'评估理由'}")
-    print("-" * 100)
+    print("\n" + "=" * 50)
+    print("=== 评估结果 (按分数排序) ===")
+    print("=" * 50)
     
-    for rank, (filename, score, reason) in enumerate(eval_results, 1):
-        print(f"{rank:<4} {filename:<30} {score:.3f}    {reason}")
+    for i, (filename, score, reason) in enumerate(eval_results, 1):
+        print(f"\n{i}. 文件: {filename}")
+        print(f"   分数: {score:.3f}")
+        print(f"   评价: {reason[:200]}{'...' if len(reason) > 200 else ''}")
     
-    # 11. 显示最佳结果
-    best_file, best_score, best_reason = eval_results[0]
-    print(f"\n🏆 得分最高的文本:")
-    print(f"文件名: {best_file}")
-    print(f"分数: {best_score:.3f}")
-    print(f"评估理由: {best_reason}")
+    # 11. 突出显示最佳结果
+    if eval_results:
+        best_filename, best_score, best_reason = eval_results[0]
+        print("\n" + "=" * 50)
+        print("🏆 最佳结果")
+        print("=" * 50)
+        print(f"文件名: {best_filename}")
+        print(f"分数: {best_score:.3f}")
+        print(f"评价: {best_reason}")
+        
+        # 显示最佳内容的预览
+        best_content = text_files[best_filename]
+        print(f"\n内容预览 (前500字符):")
+        print("-" * 30)
+        print(best_content[:500])
+        if len(best_content) > 500:
+            print("...")
+        print("-" * 30)
     
-    # 从文件名中提取模型名称（如果是生成的文件）
-    best_model = "未知"
-    if generation_results:
-        for result in generation_results:
-            if result["filename"] == best_file:
-                best_model = result["model"]
-                break
-    else:
-        # 尝试从文件名中提取模型信息
-        if "_" in best_file:
-            best_model = best_file.split("_")[0].replace("_", "/")
+    # 12. 保存详细评估结果
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_file = f"output/evaluation_results_{timestamp}.json"
     
-    print(f"生成模型: {best_model}")
-    print(f"评估模型: {eval_model_name}")
-    
-    # 12. 保存详细结果
     # 确保output文件夹存在
-    output_dir = "./output"
-    if not os.path.exists(output_dir):
+    output_dir = os.path.dirname(results_file)
+    if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"创建输出目录: {output_dir}")
     
-    results_file = f"output/evaluation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     detailed_results = {
-        "generation_time": datetime.now().isoformat(),
-        "mode": "regenerate" if args.regen else "evaluate_existing",
-        "subject": args.subject,
-        "user_requirement": user_requirement,
-        "prompt_file": "prompts/1.prompts" if args.regen else None,
-        "generation_models": model_list if args.regen else [],
-        "evaluation_model": eval_model_name,
+        "evaluation_time": datetime.now().isoformat(),
+        "user_requirement": eval_requirement,
+        "eval_model": eval_model_name,
+        "total_files": len(text_files),
         "evaluation_steps": evaluation_steps,
-        "generation_results": generation_results if args.regen else [],
-        "evaluation_results": [
+        "results": [
             {
-                "rank": rank,
+                "rank": i + 1,
                 "filename": filename,
                 "score": score,
                 "reason": reason,
                 "content": text_files[filename]
             }
-            for rank, (filename, score, reason) in enumerate(eval_results, 1)
-        ],
-        "best_result": {
-            "filename": best_file,
-            "score": best_score,
-            "reason": best_reason,
-            "model": best_model
-        }
+            for i, (filename, score, reason) in enumerate(eval_results)
+        ]
     }
     
     with open(results_file, "w", encoding="utf-8") as f:
         json.dump(detailed_results, f, indent=4, ensure_ascii=False)
     
-    print(f"\n📋 详细结果已保存到: {results_file}")
-    print(f"📁 生成的文件保存在: ./input/ 目录")
-    print(f"📊 评估结果保存在: ./output/ 目录")
-    
-    # 13. 显示最佳内容预览
-    print(f"\n📖 最佳内容预览 ({best_file}):")
-    print("-" * 50)
-    best_content = text_files[best_file]
-    preview_length = 500
-    if len(best_content) > preview_length:
-        print(best_content[:preview_length] + "...")
-    else:
-        print(best_content)
-    print("-" * 50)
-    
-    # 14. 显示使用提示
-    if not args.regen:
-        print("\n💡 提示：")
-        print("  - 使用 --regen 参数可以重新生成内容")
-        print("  - 使用 --subject \"新主题\" 可以指定不同的生成主题")
-        print("  - 使用 --eval-model \"模型名\" 可以指定不同的评估模型")
+    print(f"\n📊 详细评估结果已保存到: {results_file}")
+    print("\n✅ 程序执行完成！")
 
 if __name__ == "__main__":
     main()
