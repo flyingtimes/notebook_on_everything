@@ -62,7 +62,7 @@ def generate_comfortable_running_music(bpm=170, duration_minutes=10):
     audio = np.zeros(total_samples)
     
     # 主节拍 - 低频鼓声
-    def create_kick_drum(duration=0.15, frequency=60):
+    def create_kick_drum(duration=0.1, frequency=100):
         t = np.linspace(0, duration, int(sample_rate * duration))
         # 使用正弦波模拟鼓声，添加频率扫描效果
         freq_sweep = frequency * (1 + 2 * np.exp(-t * 20))
@@ -72,7 +72,7 @@ def generate_comfortable_running_music(bpm=170, duration_minutes=10):
         return kick * envelope
     
     # 辅助节拍 - 高频点击声
-    def create_hi_hat(duration=0.05, frequency=8000):
+    def create_hi_hat(duration=0.2, frequency=16000):
         t = np.linspace(0, duration, int(sample_rate * duration))
         # 使用白噪声模拟镲片声
         noise = np.random.normal(0, 0.1, len(t))

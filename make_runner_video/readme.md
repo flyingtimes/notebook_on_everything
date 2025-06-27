@@ -20,5 +20,9 @@ ffmpeg -i middle_third_vertical.mp4 -vf "scale=iw/2:ih/2" -an -c:v libx264 -crf 
 
 5、画面叠加
 ```
-ffmpeg -hwaccel auto -i 30m.mp4 -i demostrate.mp4 -filter_complex "[0:v][1:v]overlay=x=10:y=H-h-10:enable='between(mod(t,90),0,20)'" -c:v h264_nvenc -preset fast -crf 30 -threads 0 -c:a copy output.mp4
+ffmpeg -hwaccel auto -i 30m.mp4 -i demostrate.mp4 -filter_complex "[0:v][1:v]overlay=x=10:y=H-h-10:enable='between(mod(t,90),0,20)'" -c:v h264_nvenc -preset slow -cq 18 -c:a copy output.mp4
+```
+
+```
+ffmpeg -hwaccel auto -i 30m.mp4 -stream_loop -1 -i tutorial.mp4 -filter_complex "[0:v][1:v]overlay=x=10:y=H-h-10" -t 1200 -c:v h264_nvenc -preset slow -cq 18 -c:a copy output.mp4
 ```
